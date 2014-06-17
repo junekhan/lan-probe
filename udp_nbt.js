@@ -26,7 +26,6 @@ var NBSession = require('netbios-session');
 
 var domain = require('domain');
 var callback;
-var machine_info = {};
 
 function afp_over_tcp(hostip)
 {
@@ -46,6 +45,8 @@ function afp_over_tcp(hostip)
             var host_name = buf.toString('UTF8', 16 + utf8_name_offset + 2, 16 + utf8_name_offset + 2 + host_name_size);
             var server_type_size = buf[machine_type_offset];
             var server_type = buf.toString('UTF8', machine_type_offset + 1, machine_type_offset + 1 + server_type_size);
+            var machine_info = {};
+            machine_info["ip"] = hostip;
             machine_info["name"] = host_name;
             machine_info["type"] = server_type;
             machine_info["os_version"] = "OS X";
@@ -77,6 +78,13 @@ function nbt_over_tcp(hostname, hostip)
             console.log('host:', err.domainEmitter._host);
             afp_over_tcp(err.domainEmitter._host);
         }
+        else if(err.code == 'ETIMEDOUT')
+        {
+            var machine_info = {};
+            machine_info["ip"] = hostip;
+            machine_info["name"] = hostname;
+            callback(machine_info);
+        }
         else
         {
             throw err;
@@ -85,14 +93,26 @@ function nbt_over_tcp(hostname, hostip)
 
     d.run(function () {
             console.log(hostip);
-            ssn.connect(139, hostip, myName,queryName,function () {
-                ssn.write(NEGOTIATE_REQ, function()
+            ssn.connect(139, hostip, myName,queryName,function (err) {
+                if(err != null)
                 {
-                    console.log('negotiated!');
-                })
+                    console.log(err);
+                    var machine_info = {};
+                    machine_info["name"] = queryName.name;
+                    machine_info["ip"] = hostip;
+                    callback(machine_info);
+                }
+                else
+                {
+                    ssn.write(NEGOTIATE_REQ, function()
+                    {
+                        console.log('negotiated!');
+                    })
+                }
             });
 
             ssn.on('message', function (msg) {
+                console.log(msg)
                 if(msg[4] != 0x73) {
                     ssn.write(SETUP_ANDX_REQ, function () {
                         console.log('SETUP_ANDX_REQ sent!');
@@ -107,6 +127,9 @@ function nbt_over_tcp(hostname, hostip)
                     var native_os_offset = LEN_SETUP_ANDX_HEADER + 1 + word_to_skip*2 + 2 + secure_blob_len;
                     var null_term_offset = msg.toString('UTF8').indexOf('\0', native_os_offset);
                     var os_version = msg.toString('UTF8', native_os_offset, null_term_offset);
+                    var machine_info = {};
+                    machine_info["name"] = queryName.name;
+                    machine_info["ip"] = hostip;
                     machine_info["os_version"] = os_version;
                     if(os_version == 'Unix'){
                         machine_info["type"] = "Unix PC";
@@ -123,9 +146,15 @@ function nbt_over_tcp(hostname, hostip)
             });
 
             ssn.on('end', function(){
+                console.log('end');
             });
     });
 }
+
+server.on("close", function (err)
+{
+    console.log("server close:\n" + err.stack);
+});
 
 server.on("error", function (err)
 {
@@ -135,6 +164,7 @@ server.on("error", function (err)
 
 server.on("message", function (msg, rinfo)
 {
+    console.log(msg);
     var rcv_buf = new Buffer(msg);
     var name_cnt = rcv_buf.readUInt8(56);
     var offset = 0;
@@ -144,8 +174,12 @@ server.on("message", function (msg, rinfo)
         var suffix = rcv_buf.readUInt8(offset + 15);
         var flag = rcv_buf.readUInt8(offset + 16);
         if((flag & 0x80) == 0 && suffix == 0) {
-            var name = rcv_buf.toString('UTF8', offset, offset+15);
-            machine_info['name'] = name;
+            var name = '';
+            for(var j = 0; j < 15; j++)
+            {
+                name += String.fromCharCode(rcv_buf[offset + j]);
+            }
+            break;
         }
     }
     nbt_over_tcp(name, rinfo.address);
