@@ -72,7 +72,6 @@ function nbt_over_tcp(hostname, hostip)
     var d = domain.create();
 
     d.on('error', function(err) {
-        //console.log('Error caught by domain:', err);
         if(err.code == 'ECONNREFUSED')
         {
             console.log('host:', err.domainEmitter._host);
@@ -92,11 +91,10 @@ function nbt_over_tcp(hostname, hostip)
     });
 
     d.run(function () {
-            console.log(hostip);
+//            console.log(hostip);
             ssn.connect(139, hostip, myName,queryName,function (err) {
                 if(err != null)
                 {
-                    console.log(err);
                     var machine_info = {};
                     machine_info["name"] = queryName.name;
                     machine_info["ip"] = hostip;
@@ -112,7 +110,6 @@ function nbt_over_tcp(hostname, hostip)
             });
 
             ssn.on('message', function (msg) {
-                console.log(msg)
                 if(msg[4] != 0x73) {
                     ssn.write(SETUP_ANDX_REQ, function () {
                         console.log('SETUP_ANDX_REQ sent!');
@@ -164,7 +161,6 @@ server.on("error", function (err)
 
 server.on("message", function (msg, rinfo)
 {
-    console.log(msg);
     var rcv_buf = new Buffer(msg);
     var name_cnt = rcv_buf.readUInt8(56);
     var offset = 0;
