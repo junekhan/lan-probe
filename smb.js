@@ -15,6 +15,28 @@ const LEN_SETUP_ANDX_HEADER = 32;
 /** DSI constants **/
 const LEN_DSI_HEADER = 16;
 
+const TYPE_NULL = 0;
+const TYPE_ROUTER = 1;
+const TYPE_WIN = 2;
+const TYPE_UNIX = 3;
+const TYPE_MACMINI = 4;
+
+exports.TYPE_NULL = TYPE_NULL;
+exports.TYPE_ROUTER = TYPE_ROUTER;
+exports.TYPE_WIN = TYPE_WIN;
+exports.TYPE_UNIX = TYPE_UNIX;
+exports.TYPE_MACMINI = TYPE_MACMINI;
+
+
+const MACHINE_TYPE = {
+    0: {imag_prefix: 'NetworkDevice'},
+    1: {imag_prefix: 'Router'},
+    2: {imag_prefix: 'WindowsPC'},
+    3: {imag_prefix: 'UnixPC'},
+    4: {imag_prefix: 'MacMini'}
+};
+exports.MACHINE_TYPE = MACHINE_TYPE;
+
 
 var dgram = require("dgram");
 var server = dgram.createSocket("udp4");
@@ -34,7 +56,7 @@ function afp_over_tcp(hostip)
     sock.connect(548, hostip);
 
     sock.on('connect', function(){
-        sock.write(AFP_REQ)
+        sock.write(AFP_REQ);
     });
 
     sock.on('data',function(buf){
@@ -45,11 +67,16 @@ function afp_over_tcp(hostip)
             var host_name = buf.toString('UTF8', 16 + utf8_name_offset + 2, 16 + utf8_name_offset + 2 + host_name_size);
             var server_type_size = buf[machine_type_offset];
             var server_type = buf.toString('UTF8', machine_type_offset + 1, machine_type_offset + 1 + server_type_size);
+
             var machine_info = {};
-            machine_info["ip"] = hostip;
-            machine_info["name"] = host_name;
-            machine_info["type"] = server_type;
-            machine_info["os_version"] = "OS X";
+            machine_info.ip = hostip;
+            machine_info.name = host_name;
+//            console.log(server_type);
+//            if(server_type.search(/macmini/i)) {
+//                console.log(server_type);
+//            }
+            machine_info.type = TYPE_MACMINI;
+            machine_info.os_version = "OS X";
             callback(machine_info);
         }
     });
@@ -58,7 +85,7 @@ function afp_over_tcp(hostip)
     });
 
     sock.on('error', function (err) {
-        console.log(err);
+        //console.log(err);
     })
 }
 
@@ -72,16 +99,18 @@ function nbt_over_tcp(hostname, hostip)
     var d = domain.create();
 
     d.on('error', function(err) {
-        if(err.code == 'ECONNREFUSED')
-        {
-            console.log('host:', err.domainEmitter._host);
-            afp_over_tcp(err.domainEmitter._host);
-        }
-        else if(err.code == 'ETIMEDOUT')
+//        if(err.code == 'ECONNREFUSED')
+//        {
+//            console.log('host:', err.domainEmitter._host);
+//            afp_over_tcp(err.domainEmitter._host);
+//        }
+        if(err.code == 'ETIMEDOUT'
+            || err.code == 'ECONNREFUSED')
         {
             var machine_info = {};
-            machine_info["ip"] = hostip;
-            machine_info["name"] = hostname;
+            machine_info.ip = hostip;
+            machine_info.name = hostname;
+            machine_info.type = TYPE_NULL;
             callback(machine_info);
         }
         else
@@ -96,8 +125,9 @@ function nbt_over_tcp(hostname, hostip)
                 if(err != null)
                 {
                     var machine_info = {};
-                    machine_info["name"] = queryName.name;
-                    machine_info["ip"] = hostip;
+                    machine_info.name = queryName.name;
+                    machine_info.ip = hostip;
+                    machine_info.type = TYPE_NULL;
                     callback(machine_info);
                 }
                 else
@@ -125,21 +155,21 @@ function nbt_over_tcp(hostname, hostip)
                     var null_term_offset = msg.toString('UTF8').indexOf('\0', native_os_offset);
                     var os_version = msg.toString('UTF8', native_os_offset, null_term_offset);
                     var machine_info = {};
-                    machine_info["name"] = queryName.name;
-                    machine_info["ip"] = hostip;
-                    machine_info["os_version"] = os_version;
+                    machine_info.name = queryName.name;
+                    machine_info.ip = hostip;
+                    machine_info.os_version = os_version;
                     if(os_version == 'Unix'){
-                        machine_info["type"] = "Unix PC";
+                        machine_info.type = TYPE_UNIX;
                     }
                     else{
-                        machine_info["type"] = "Windows PC";
+                        machine_info.type = TYPE_WIN;
                     }
                     callback(machine_info);
                 }
             });
 
             ssn.on('error', function(err){
-                console.log(err);
+                //console.log(err);
             });
 
             ssn.on('end', function(){
@@ -190,6 +220,7 @@ server.on("listening", function ()
 exports.get_detail_info = function(ip, cb)
 {
     server.send(NBNS_REQ, 0, NBNS_REQ.length, 137, ip);
+    afp_over_tcp(ip);
     callback = cb;
 }
 

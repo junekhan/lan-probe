@@ -2,13 +2,16 @@
  * Created by jun.han on 2014/6/11 0011.
  */
 
-var nbt = require('./smb.js');
+var smb = require('./smb.js');
 //var ips = new Array("192.168.9.234",  "192.168.9.8", "192.168.9.5");
-var ifs = [];
+var ifs = null;
 var callback;
 var time_out_id = 0;
+var scan_timer = null;
+var arp_timer = null;
 
 const STATUS_INACTIVE = "inactive";
+exports.STATUS_INACTIVE = STATUS_INACTIVE;
 
 const ETH_HDR_LEN = 14;
 const ARP_HDR_LEN = 28;
@@ -20,11 +23,21 @@ const ARP_HARD_TYPE = 0x0001;
 const ARP_PROTOCOL_IP = 0x0800;
 const ARP_OPCODE_REQ = 0x0001;
 
+const REGULAR_SCAN_INTERVAL = 300000; // every 5 minutes
+
+const TIME_SLEEP_FOR_ARP = 3000;
+function wrapped_scan() {
+    exports.do_scan(callback, ifs);
+}
+
 function wrapped_cb()
 {
     if(typeof callback === 'function')
     {
-        callback(ifs);
+        callback();
+        if(scan_timer == null) {
+            scan_timer = setInterval(wrapped_scan, REGULAR_SCAN_INTERVAL);
+        }
     }
 }
 
@@ -51,7 +64,7 @@ function Machine_info(opt)
 
 function _ip2int(ip)
 {
-    var num = 0;
+    var num;
     ip = ip.split(".");
     num = Number(ip[0]) * 256 * 256 * 256 + Number(ip[1]) * 256 * 256 + Number(ip[2]) * 256 + Number(ip[3]);
     num = num >>> 0;
@@ -71,16 +84,23 @@ function cb_on_get_one(machine_info)
         var netmask = parseInt(ifs[i].netmask);
         if((netmask & _ip2int(ifs[i].ip)) == (netmask & _ip2int(machine_info.ip)))
         {
-            if(machine_info.name != null)
+            if(machine_info.name != null
+                && ifs[i].machine_infos[machine_info.ip] != null)
             {
                 ifs[i].machine_infos[machine_info.ip].name = machine_info.name;
             }
-            ifs[i].machine_infos[machine_info.ip].type = machine_info.type;
+            if(ifs[i].gateway == machine_info.ip) {
+                ifs[i].machine_infos[machine_info.ip].type = smb.TYPE_ROUTER;
+            }
+            else if(machine_info.type != smb.TYPE_NULL) {
+                ifs[i].machine_infos[machine_info.ip].type = machine_info.type;
+            }
             ifs[i].machine_infos[machine_info.ip].os_version = machine_info.os_version;
+
             break;
         }
     }
-    time_out_id = setTimeout(wrapped_cb, 3000);
+    time_out_id = setTimeout(wrapped_cb, 1000);
 }
 
 //function send_arp_over_net(eth) {
@@ -150,11 +170,26 @@ function arp_trig(eth) {
     }
 }
 
-exports.do_scan = function(cb)
+function send_arp_to_all_eth() {
+    for (var each in ifs) {
+        if(ifs[each].status == STATUS_INACTIVE) {
+            continue;
+        }
+        arp_trig(ifs[each]);
+    }
+}
+
+exports.do_scan = function(cb, data)
 {
+    ifs = data;
     ifs.length = 0;
+
+    if(arp_timer == null) {
+        arp_timer = setInterval(send_arp_to_all_eth, TIME_SLEEP_FOR_ARP);
+    }
+
     var spawn = require('child_process').spawn;
-    callback = cb;
+    callback = (cb == null ? callback : cb);
     var ifconfig = spawn('ifconfig', ['-u']);
     ifconfig.stdout.on('data', function(data) {
         var reg = /^(^en\d).+\n(^\s+.*\n)*^\s+ether\s+(\S+)/gm;
@@ -165,7 +200,6 @@ exports.do_scan = function(cb)
             cur_info.name = res[1];
             cur_info.mac = res[3];
             ifs.push(cur_info);
-            console.log(cur_info.mac);
         }
 
         reg = /(^en\d).+\n(^\s+.*\n)*^\s+inet\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+netmask\s+([^\s]+)/gm;
@@ -202,13 +236,6 @@ exports.do_scan = function(cb)
                 }
             });
 
-        for (var each in ifs) {
-            if(ifs[each].status == STATUS_INACTIVE) {
-                continue;
-            }
-            arp_trig(ifs[each]);
-        }
-
         var arp = exec("arp -an",
             function (error, data, stderr) {
                 if(error != null) {
@@ -229,14 +256,17 @@ exports.do_scan = function(cb)
                             && (_ip2int(res[1]) & 0xFF) != 0xFF
                             && ifs[each].ip != res[1]
                             ) {
-                            var new_machine = new Machine_info({ip: res[1], mac: res[2], name: res[1]});
+                            var new_machine = new Machine_info({ip: res[1], mac: res[2], name: res[1], type: smb.TYPE_NULL});
                             ifs[each].machine_infos[res[1]] = new_machine;
                             ifs[each].machine_infos.length++;
+
+                            if(ifs[each].gateway == res[1]) {
+                                ifs[each].machine_infos[res[1]].type = smb.TYPE_ROUTER;
+                            }
                             break;
                         }
                     }
                 }
-                console.log(ifs);
 
                 for(var i = 0; i < ifs.length; i++) {
                     if(ifs[i].status == STATUS_INACTIVE) {
@@ -244,7 +274,7 @@ exports.do_scan = function(cb)
                     }
                     for(var each in ifs[i].machine_infos) {
                         if(each != 'length') {
-                            nbt.get_detail_info(each, cb_on_get_one);
+                            smb.get_detail_info(each, cb_on_get_one);
                         }
                     }
                 }
