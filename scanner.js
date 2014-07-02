@@ -4,7 +4,7 @@
 
 var smb = require('./smb.js');
 //var ips = new Array("192.168.9.234",  "192.168.9.8", "192.168.9.5");
-var ifs = null;
+var ifs = [];
 var callback;
 var time_out_id = 0;
 var scan_timer = null;
@@ -23,9 +23,9 @@ const ARP_HARD_TYPE = 0x0001;
 const ARP_PROTOCOL_IP = 0x0800;
 const ARP_OPCODE_REQ = 0x0001;
 
-const REGULAR_SCAN_INTERVAL = 300000; // every 5 minutes
+const REGULAR_SCAN_INTERVAL = 60000;
+const REGULAR_ARP_INTERVAL = 3000;
 
-const TIME_SLEEP_FOR_ARP = 3000;
 function wrapped_scan() {
     exports.do_scan(callback, ifs);
 }
@@ -34,7 +34,7 @@ function wrapped_cb()
 {
     if(typeof callback === 'function')
     {
-        callback();
+        callback(ifs);
         if(scan_timer == null) {
             scan_timer = setInterval(wrapped_scan, REGULAR_SCAN_INTERVAL);
         }
@@ -95,7 +95,9 @@ function cb_on_get_one(machine_info)
             else if(machine_info.type != smb.TYPE_NULL) {
                 ifs[i].machine_infos[machine_info.ip].type = machine_info.type;
             }
-            ifs[i].machine_infos[machine_info.ip].os_version = machine_info.os_version;
+            if(ifs[i].machine_infos[machine_info.ip] != null) {
+                ifs[i].machine_infos[machine_info.ip].os_version = machine_info.os_version;
+            }
 
             break;
         }
@@ -179,13 +181,12 @@ function send_arp_to_all_eth() {
     }
 }
 
-exports.do_scan = function(cb, data)
+exports.do_scan = function(cb)
 {
-    ifs = data;
     ifs.length = 0;
 
     if(arp_timer == null) {
-        arp_timer = setInterval(send_arp_to_all_eth, TIME_SLEEP_FOR_ARP);
+        arp_timer = setInterval(send_arp_to_all_eth, REGULAR_ARP_INTERVAL);
     }
 
     var spawn = require('child_process').spawn;
@@ -227,63 +228,62 @@ exports.do_scan = function(cb, data)
                 var res;
                 while(res = reg.exec(data)) {
                     for(var i = 0; i < ifs.length; i++) {
-                        if(ifs[i].name == res[2])
-                        {
+                        if(ifs[i].name == res[2]) {
                             ifs[i].gateway = res[1];
                             break;
                         }
                     }
                 }
-            });
 
-        var arp = exec("arp -an",
-            function (error, data, stderr) {
-                if(error != null) {
-                    console.log("error:" + error);
-                    console.log("stderr:" + stderr);
-                    return;
-                }
-
-                var reg = /\((\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\)\s+at\s+([^\( ]+)/g;
-                var res;
-                while(res = reg.exec(data)) {
-                    for (var each in ifs) {
-                        if(ifs[each].status == "inactive") {
-                            continue;
+                var arp = exec("arp -an",
+                    function (error, data, stderr) {
+                        if(error != null) {
+                            console.log("error:" + error);
+                            console.log("stderr:" + stderr);
+                            return;
                         }
-                        var netmask = parseInt(ifs[each].netmask);
-                        if((netmask & _ip2int(ifs[each].ip)) == (netmask & _ip2int(res[1]))
-                            && (_ip2int(res[1]) & 0xFF) != 0xFF
-                            && ifs[each].ip != res[1]
-                            ) {
-                            var new_machine = new Machine_info({ip: res[1], mac: res[2], name: res[1], type: smb.TYPE_NULL});
-                            ifs[each].machine_infos[res[1]] = new_machine;
-                            ifs[each].machine_infos.length++;
 
-                            if(ifs[each].gateway == res[1]) {
-                                ifs[each].machine_infos[res[1]].type = smb.TYPE_ROUTER;
+                        var reg = /\((\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\)\s+at\s+([^\( ]+)/g;
+                        var res;
+                        while(res = reg.exec(data)) {
+                            for (var each in ifs) {
+                                if(ifs[each].status == "inactive") {
+                                    continue;
+                                }
+                                var netmask = parseInt(ifs[each].netmask);
+                                if((netmask & _ip2int(ifs[each].ip)) == (netmask & _ip2int(res[1]))
+                                    && (_ip2int(res[1]) & 0xFF) != 0xFF
+                                    && ifs[each].ip != res[1]
+                                    ) {
+                                    var new_machine = new Machine_info({ip: res[1], mac: res[2], name: res[1], type: smb.TYPE_NULL});
+                                    ifs[each].machine_infos[res[1]] = new_machine;
+                                    ifs[each].machine_infos.length++;
+
+                                    if(ifs[each].gateway == res[1]) {
+                                        ifs[each].machine_infos[res[1]].type = smb.TYPE_ROUTER;
+                                    }
+                                    break;
+                                }
                             }
-                            break;
                         }
-                    }
-                }
 
-                for(var i = 0; i < ifs.length; i++) {
-                    if(ifs[i].status == STATUS_INACTIVE) {
-                        continue;
-                    }
-                    for(var each in ifs[i].machine_infos) {
-                        if(each != 'length') {
-                            smb.get_detail_info(each, cb_on_get_one);
+                        for(var i = 0; i < ifs.length; i++) {
+                            if(ifs[i].status == STATUS_INACTIVE) {
+                                continue;
+                            }
+                            for(var each in ifs[i].machine_infos) {
+                                if(each != 'length') {
+                                    smb.get_detail_info(each, cb_on_get_one);
+                                }
+                            }
                         }
-                    }
-                }
+                    });
             });
+
     });
 }
 
-exports.do_scan();
-
-
-
+exports.do_scan(function(aa) {
+    console.log(aa);
+});
 
